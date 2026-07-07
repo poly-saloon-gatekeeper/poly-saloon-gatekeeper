@@ -1,0 +1,146 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model GuildConfig {
+  guildId                 String   @id
+  welcomeChannelId        String?
+  rulesChannelId          String?
+  introChannelId          String?
+  modLogChannelId         String?
+  reportsChannelId        String?
+  dailyPromptChannelId    String?
+  newArrivalRoleId        String?
+  rulesAcceptedRoleId     String?
+  saloonMemberRoleId      String?
+  mutedRoleId             String?
+  quarantinedRoleId       String?
+  includeModeratorsInBotIntroDM Boolean @default(false)
+  inviteBlocklist         String   @default("discord.gg,discord.com/invite")
+  suspiciousLinkBlocklist String   @default("")
+  antiSpamEnabled         Boolean  @default(false)
+  monitorAllChannels      Boolean  @default(false)
+  monitoredChannelIds     String   @default("")
+  monitorExcludedChannelIds String @default("")
+  quarantineEnabled       Boolean  @default(false)
+  dailyPromptEnabled      Boolean  @default(false)
+  dailyPromptTime         String   @default("09:00")
+  timezone                String   @default("America/New_York")
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+}
+
+model OnboardingUser {
+  id                   String    @id @default(cuid())
+  guildId              String
+  userId               String
+  username             String
+  joinedAt             DateTime
+  introDeadline        DateTime
+  rulesAccepted        Boolean   @default(false)
+  introCompleted       Boolean   @default(false)
+  introMessageId       String?
+  introChannelId       String?
+  introSubmittedAt     DateTime?
+  introValidationStatus String   @default("pending")
+  reminder12hSent      Boolean   @default(false)
+  reminder23hSent      Boolean   @default(false)
+  removedAt            DateTime?
+  removalReason        String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@unique([guildId, userId])
+  @@index([guildId, introDeadline])
+}
+
+model Warning {
+  id          String   @id @default(cuid())
+  guildId     String
+  userId      String
+  moderatorId String
+  reason      String
+  createdAt   DateTime @default(now())
+
+  @@index([guildId, userId])
+}
+
+model Report {
+  id         String   @id @default(cuid())
+  guildId    String
+  reporterId String
+  targetId   String
+  reason     String
+  status     String   @default("open")
+  createdAt  DateTime @default(now())
+
+  @@index([guildId, targetId])
+}
+
+model Prompt {
+  id        String   @id @default(cuid())
+  guildId   String
+  theme     String
+  text      String
+  active    Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@index([guildId, theme])
+}
+
+model DailyPromptPost {
+  id        String   @id @default(cuid())
+  guildId   String
+  postDate  String
+  promptId  String?
+  channelId String
+  createdAt DateTime @default(now())
+
+  @@unique([guildId, postDate])
+  @@index([guildId, createdAt])
+}
+
+model ModLog {
+  id          String   @id @default(cuid())
+  guildId     String
+  action      String
+  userId      String?
+  moderatorId String?
+  reason      String?
+  metadata    String?
+  createdAt   DateTime @default(now())
+
+  @@index([guildId, action])
+}
+
+model BotIntroDMLog {
+  id            String   @id @default(cuid())
+  guildId       String
+  userId        String
+  status        String   @default("pending")
+  sentAt        DateTime?
+  failureReason String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([guildId, userId])
+  @@index([guildId, status])
+}
+
+model BotIntroDMCampaign {
+  id        String   @id @default(cuid())
+  guildId   String   @unique
+  status    String   @default("idle")
+  startedBy String?
+  startedAt DateTime?
+  stoppedAt DateTime?
+  finishedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
