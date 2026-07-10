@@ -1,4 +1,4 @@
-const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require("discord.js");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } = require("discord.js");
 const prisma = require("../db");
 const { getConfig, updateConfig } = require("../services/configService");
 const { logAction } = require("../services/logService");
@@ -93,19 +93,36 @@ async function handleSetup(interaction) {
 async function handleRulesPost(interaction) {
   const denied = requireAdmin(interaction);
   if (denied) return denied;
+  await interaction.deferReply({ ephemeral: true });
   const config = await getConfig(interaction.guildId);
   const channel = config.rulesChannelId
     ? await interaction.guild.channels.fetch(config.rulesChannelId).catch(() => null)
     : interaction.channel;
   if (!channel) {
-    return interaction.reply({ content: "I could not find the rules channel. Run /setup first.", ephemeral: true });
+    return interaction.editReply({ content: "I could not find the rules channel. Run /setup first." });
+  }
+  if (!channel.isTextBased?.()) {
+    return interaction.editReply({ content: "The configured rules channel is not a text channel. Run /setup with a text rules channel." });
+  }
+  const me = interaction.guild.members.me;
+  const permissions = me ? channel.permissionsFor(me) : null;
+  const missingPermissions = [
+    ["View Channel", PermissionFlagsBits.ViewChannel],
+    ["Send Messages", PermissionFlagsBits.SendMessages],
+    ["Embed Links", PermissionFlagsBits.EmbedLinks],
+    ["Read Message History", PermissionFlagsBits.ReadMessageHistory]
+  ].filter(([, permission]) => permissions && !permissions.has(permission)).map(([name]) => name);
+  if (missingPermissions.length) {
+    return interaction.editReply({
+      content: `I cannot post in ${channel}. Missing permissions: ${missingPermissions.join(", ")}.`
+    });
   }
   await channel.send(buildRulesMessage());
   await logAction(interaction.guild, "RULES_POSTED", {
     moderatorId: interaction.user.id,
     metadata: { channelId: channel.id }
   });
-  await interaction.reply({ content: "Rules posted with the agreement button.", ephemeral: true });
+  await interaction.editReply({ content: "Rules posted with the agreement button." });
 }
 
 async function handleIntroTemplate(interaction) {
