@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node src/index.js",
     "start": "node src/index.js",
-    "start:prod": "npm run prisma:deploy && node src/index.js",
+    "start:prod": "npm run prisma:deploy && npm run register && node src/index.js",
     "register": "node src/register-commands.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
