@@ -1,7 +1,7 @@
 const prisma = require("../db");
 const { getConfig } = require("./configService");
 const { logAction } = require("./logService");
-const { INTRO_LABELS, WELCOME_MESSAGE } = require("../constants");
+const { INTRO_LABELS, buildWelcomeMessage } = require("../constants");
 const { safeSend, safeRoleAdd, safeRoleRemove, channelMention } = require("../utils/discord");
 
 function missingIntroLabels(content) {
@@ -65,7 +65,10 @@ async function handleMemberJoin(member) {
     ? await member.guild.channels.fetch(config.welcomeChannelId).catch(() => null)
     : null;
 
-  const message = WELCOME_MESSAGE;
+  const message = buildWelcomeMessage({
+    rulesChannel: channelMention(config.rulesChannelId, "#the-rules"),
+    introChannel: channelMention(config.introChannelId, "#general-chat-introductions")
+  });
   if (welcomeChannel) {
     await safeSend(welcomeChannel, { content: `${member}, ${message}` });
   }
@@ -82,9 +85,101 @@ function hasConfiguredRole(member, roleId) {
   return Boolean(roleId && member.roles.cache.has(roleId));
 }
 
+function roleIdsAreDistinct(...roleIds) {
+  const configured = roleIds.filter(Boolean);
+  return new Set(configured).size === configured.length;
+}
+
+async function findCompleteIntroInChannel(guild, config, userId) {
+  const scan = await scanCompleteIntroInChannel(guild, config, userId);
+  return scan.intro ?? null;
+}
+
+async function scanCompleteIntroInChannel(guild, config, userId) {
+  if (!config.introChannelId) return { status: "unavailable", intro: null };
+  const channel = await guild.channels.fetch(config.introChannelId).catch(() => null);
+  if (!channel?.isTextBased?.() || !channel.messages?.fetch) return { status: "unavailable", intro: null };
+
+  let before;
+  while (true) {
+    const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => undefined);
+    if (!messages) return { status: "unavailable", intro: null };
+    if (!messages.size) return { status: "not_found", intro: null };
+
+    const intro = messages
+      .filter((message) => message.author?.id === userId)
+      .find((message) => validateIntro(message.content ?? "").ok);
+
+    if (intro) return { status: "found", intro };
+    before = messages.last()?.id;
+    if (!before || messages.size < 100) return { status: "not_found", intro: null };
+  }
+}
+
+function effectiveIntroDeadline(record, member) {
+  const joinedDeadline = member.joinedAt
+    ? new Date(member.joinedAt.getTime() + 24 * 60 * 60 * 1000)
+    : null;
+  if (!joinedDeadline || joinedDeadline <= record.introDeadline) return record.introDeadline;
+  return joinedDeadline;
+}
+
+async function reconcileOnboardingRecord(guild, member, record, config) {
+  const update = {};
+
+  if (!record.rulesAccepted && hasConfiguredRole(member, config.rulesAcceptedRoleId)) {
+    update.rulesAccepted = true;
+  }
+
+  if (!record.introCompleted) {
+    const intro = await findCompleteIntroInChannel(guild, config, member.id);
+    if (intro) {
+      update.introCompleted = true;
+      update.introValidationStatus = "existing_intro_found";
+      update.introMessageId = intro.id;
+      update.introChannelId = intro.channelId;
+      update.introSubmittedAt = intro.createdAt ?? new Date();
+    }
+  }
+
+  const saloonRoleMeansApproved = roleIdsAreDistinct(config.newArrivalRoleId, config.saloonMemberRoleId)
+    && hasConfiguredRole(member, config.saloonMemberRoleId)
+    && !hasConfiguredRole(member, config.newArrivalRoleId);
+
+  if (saloonRoleMeansApproved) {
+    update.rulesAccepted = true;
+    update.introCompleted = true;
+    update.introValidationStatus = "already_saloon_member";
+  }
+
+  if (!Object.keys(update).length) return record;
+
+  const updated = await prisma.onboardingUser.update({
+    where: { id: record.id },
+    data: update
+  });
+
+  await logAction(guild, "ONBOARDING_RECORD_RECONCILED", {
+    userId: member.id,
+    reason: "Onboarding status was reconciled from roles or intro-channel history.",
+    metadata: update
+  });
+
+  return updated;
+}
+
 async function acceptRules(interaction) {
   const config = await getConfig(interaction.guildId);
   const member = await interaction.guild.members.fetch(interaction.user.id);
+  const existingRecord = await prisma.onboardingUser.findUnique({
+    where: { guildId_userId: { guildId: interaction.guildId, userId: interaction.user.id } }
+  });
+
+  if (existingRecord?.rulesAccepted || hasConfiguredRole(member, config.rulesAcceptedRoleId)) {
+    await maybeCompleteOnboarding(member);
+    await interaction.deferUpdate();
+    return;
+  }
 
   await prisma.onboardingUser.upsert({
     where: { guildId_userId: { guildId: interaction.guildId, userId: interaction.user.id } },
@@ -106,10 +201,12 @@ async function acceptRules(interaction) {
       reason: "Could not assign Rules Accepted role. Check bot role hierarchy."
     });
   }
-  await maybeCompleteOnboarding(member);
+  const completed = await maybeCompleteOnboarding(member);
 
   await interaction.reply({
-    content: "Rules accepted. Thank you for helping keep Poly Saloon warm, grown, and safe.",
+    content: completed
+      ? "Rules accepted and your intro is complete. Welcome fully into Poly Saloon."
+      : `Rules accepted. Next, post your introduction in ${channelMention(config.introChannelId, "#general-chat-introductions")} to unlock full server access.`,
     ephemeral: true
   });
 }
@@ -167,12 +264,16 @@ async function handleIntroMessage(message) {
   }
 
   if (!updated.rulesAccepted) {
-    await message.reply(`Your intro is complete. One last step: please accept the rules in ${channelMention(config.rulesChannelId, "#the-rules")}.`);
+    await safeSend(message.member, {
+      content: `Your intro is complete. One last step: please accept the rules in ${channelMention(config.rulesChannelId, "#the-rules")}.`
+    });
     return;
   }
 
   await maybeCompleteOnboarding(message.member);
-  await message.reply("Your intro is complete and your rules are accepted. Welcome fully into Poly Saloon.");
+  await safeSend(message.member, {
+    content: "Your intro is complete and your rules are accepted. Welcome fully into Poly Saloon."
+  });
 }
 
 async function maybeCompleteOnboarding(member) {
@@ -240,40 +341,72 @@ async function enforceOnboarding(client) {
     const member = await guild.members.fetch(record.userId).catch(() => null);
     if (!member) continue;
 
-    if (hasConfiguredRole(member, config.saloonMemberRoleId) && !hasConfiguredRole(member, config.newArrivalRoleId)) {
-      await prisma.onboardingUser.update({
-        where: { id: record.id },
-        data: {
-          rulesAccepted: true,
-          introCompleted: true,
-          introValidationStatus: "already_saloon_member"
-        }
-      });
-      await logAction(guild, "ONBOARDING_RECORD_RECONCILED", {
-        userId: member.id,
-        reason: "Member already has Saloon Member role; skipped enforcement."
-      });
+    const reconciledRecord = await reconcileOnboardingRecord(guild, member, record, config);
+    if (reconciledRecord.rulesAccepted && reconciledRecord.introCompleted) {
+      await maybeCompleteOnboarding(member);
       continue;
     }
 
-    const ageMs = now.getTime() - record.joinedAt.getTime();
-    const remainingMs = record.introDeadline.getTime() - now.getTime();
-    const missing = [
-      record.rulesAccepted ? null : "accept the rules",
-      record.introCompleted ? null : "post a complete intro"
-    ].filter(Boolean).join(" and ");
+    const ambiguousOnboardingRoles = !roleIdsAreDistinct(
+      config.newArrivalRoleId,
+      config.rulesAcceptedRoleId,
+      config.saloonMemberRoleId
+    );
 
-    if (ageMs >= 12 * 60 * 60 * 1000 && !record.reminder12hSent && remainingMs > 60 * 60 * 1000) {
-      await safeSend(member, { content: `A warm reminder from the door: please ${missing} within 24 hours of joining Poly Saloon.` });
-      await prisma.onboardingUser.update({ where: { id: record.id }, data: { reminder12hSent: true } });
+    const deadline = effectiveIntroDeadline(reconciledRecord, member);
+    if (deadline > reconciledRecord.introDeadline) {
+      await prisma.onboardingUser.update({ where: { id: reconciledRecord.id }, data: { introDeadline: deadline } });
     }
 
-    if (remainingMs <= 60 * 60 * 1000 && remainingMs > 0 && !record.reminder23hSent) {
+    const ageMs = now.getTime() - record.joinedAt.getTime();
+    const remainingMs = deadline.getTime() - now.getTime();
+    const missing = [
+      reconciledRecord.rulesAccepted ? null : "accept the rules",
+      reconciledRecord.introCompleted ? null : "post a complete intro"
+    ].filter(Boolean).join(" and ");
+
+    if (ageMs >= 12 * 60 * 60 * 1000 && !reconciledRecord.reminder12hSent && remainingMs > 60 * 60 * 1000) {
+      await safeSend(member, { content: `A warm reminder from the door: please ${missing} within 24 hours of joining Poly Saloon.` });
+      await prisma.onboardingUser.update({ where: { id: reconciledRecord.id }, data: { reminder12hSent: true } });
+    }
+
+    if (remainingMs <= 60 * 60 * 1000 && remainingMs > 0 && !reconciledRecord.reminder23hSent) {
       await safeSend(member, { content: `Final onboarding reminder: please ${missing} within the next hour so you can stay in Poly Saloon.` });
-      await prisma.onboardingUser.update({ where: { id: record.id }, data: { reminder23hSent: true } });
+      await prisma.onboardingUser.update({ where: { id: reconciledRecord.id }, data: { reminder23hSent: true } });
     }
 
     if (remainingMs <= 0) {
+      const finalIntroScan = await scanCompleteIntroInChannel(guild, config, member.id);
+      if (finalIntroScan.status === "found") {
+        const finalRecord = await prisma.onboardingUser.update({
+          where: { id: reconciledRecord.id },
+          data: {
+            introCompleted: true,
+            introValidationStatus: "existing_intro_found",
+            introMessageId: finalIntroScan.intro.id,
+            introChannelId: finalIntroScan.intro.channelId,
+            introSubmittedAt: finalIntroScan.intro.createdAt ?? new Date()
+          }
+        });
+        if (finalRecord.rulesAccepted) await maybeCompleteOnboarding(member);
+        continue;
+      }
+      if (finalIntroScan.status === "unavailable") {
+        await logAction(guild, "ONBOARDING_REMOVAL_SKIPPED", {
+          userId: member.id,
+          reason: "Skipped automatic removal because the intro channel could not be fully scanned.",
+          metadata: { missing }
+        });
+        continue;
+      }
+      if (ambiguousOnboardingRoles) {
+        await logAction(guild, "ONBOARDING_REMOVAL_SKIPPED", {
+          userId: member.id,
+          reason: "Skipped automatic removal because onboarding roles are not distinct.",
+          metadata: { missing }
+        });
+        continue;
+      }
       await removeForOnboarding(member, `Onboarding incomplete after 24 hours: still needs to ${missing}.`).catch((error) =>
         logAction(guild, "ONBOARDING_REMOVAL_FAILED", {
           userId: member.id,
@@ -307,5 +440,7 @@ module.exports = {
   maybeCompleteOnboarding,
   removeForOnboarding,
   enforceOnboarding,
+  findCompleteIntroInChannel,
+  reconcileOnboardingRecord,
   buildStatus
 };
