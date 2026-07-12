@@ -134,7 +134,7 @@ async function handleIntroCheck(interaction) {
   const denied = requireModerator(interaction);
   if (denied) return denied;
   const user = interaction.options.getUser("user", true);
-  const status = await buildStatus(interaction.guildId, user.id);
+  const status = await buildStatus(interaction.guild, user.id);
   await interaction.reply({ content: status, ephemeral: true });
 }
 
