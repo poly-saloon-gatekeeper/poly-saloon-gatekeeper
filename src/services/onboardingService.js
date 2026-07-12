@@ -418,11 +418,48 @@ async function enforceOnboarding(client) {
   }
 }
 
-async function buildStatus(guildId, userId) {
-  const record = await prisma.onboardingUser.findUnique({
+async function buildStatus(guildOrGuildId, userId) {
+  const guildId = typeof guildOrGuildId === "string" ? guildOrGuildId : guildOrGuildId.id;
+  let record = await prisma.onboardingUser.findUnique({
     where: { guildId_userId: { guildId, userId } }
   });
-  if (!record) return "No onboarding record found for that member.";
+
+  if (typeof guildOrGuildId !== "string") {
+    const guild = guildOrGuildId;
+    const config = await getConfig(guild.id);
+    const member = await guild.members.fetch(userId).catch(() => null);
+    if (record && member) {
+      record = await reconcileOnboardingRecord(guild, member, record, config);
+    } else if (!record) {
+      const introScan = await scanCompleteIntroInChannel(guild, config, userId);
+      if (introScan.status === "found") {
+        const user = await guild.client.users.fetch(userId).catch(() => null);
+        record = await prisma.onboardingUser.create({
+          data: {
+            guildId: guild.id,
+            userId,
+            username: user?.tag ?? userId,
+            joinedAt: member?.joinedAt ?? introScan.intro.createdAt ?? new Date(),
+            introDeadline: member?.joinedAt
+              ? new Date(member.joinedAt.getTime() + 24 * 60 * 60 * 1000)
+              : new Date(),
+            rulesAccepted: member ? hasConfiguredRole(member, config.rulesAcceptedRoleId) : false,
+            introCompleted: true,
+            introMessageId: introScan.intro.id,
+            introChannelId: introScan.intro.channelId,
+            introSubmittedAt: introScan.intro.createdAt ?? new Date(),
+            introValidationStatus: "existing_intro_found"
+          }
+        });
+        await logAction(guild, "ONBOARDING_RECORD_RECONCILED", {
+          userId,
+          reason: "Intro-check found an existing complete intro in channel history."
+        });
+      }
+    }
+  }
+
+  if (!record) return "No onboarding record found for that member, and no complete intro was found in the configured intro channel.";
   return [
     `Rules accepted: ${record.rulesAccepted ? "yes" : "no"}`,
     `Intro complete: ${record.introCompleted ? "yes" : "no"}`,
