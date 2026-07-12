@@ -12,18 +12,24 @@ function missingIntroLabels(content) {
 function extractAge(content) {
   const ageLine = content.split(/\r?\n/)
     .find((line) => line.toLowerCase().includes("age:"));
-  if (!ageLine) return null;
-  const match = ageLine.match(/\b(\d{1,3})\b/);
+  const source = ageLine ?? content;
+  const match = source.match(/\bage\s*:?\s*(\d{1,3})\b/i);
   return match ? Number(match[1]) : null;
+}
+
+function introHasEnoughRealFields(content, missing) {
+  const colonFieldCount = content
+    .split(/\r?\n/)
+    .filter((line) => /^[^:\n]{2,40}:\s*\S/.test(line.trim()))
+    .length;
+  const expectedMatches = INTRO_LABELS.length - missing.length;
+
+  return expectedMatches >= 9 || colonFieldCount >= 9;
 }
 
 function validateIntro(content) {
   const missing = missingIntroLabels(content);
   const age = extractAge(content);
-
-  if (missing.length) {
-    return { ok: false, status: "missing_fields", missing, age };
-  }
 
   if (!Number.isInteger(age)) {
     return { ok: false, status: "age_unclear", missing: [], age };
@@ -31,6 +37,10 @@ function validateIntro(content) {
 
   if (age < 18) {
     return { ok: false, status: "underage", missing: [], age };
+  }
+
+  if (missing.length && !introHasEnoughRealFields(content, missing)) {
+    return { ok: false, status: "missing_fields", missing, age };
   }
 
   return { ok: true, status: "complete", missing: [], age };
