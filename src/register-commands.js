@@ -8,6 +8,11 @@ async function main() {
     ? Routes.applicationGuildCommands(env.DISCORD_CLIENT_ID, env.DISCORD_GUILD_ID)
     : Routes.applicationCommands(env.DISCORD_CLIENT_ID);
 
+  if (env.DISCORD_GUILD_ID) {
+    await rest.put(Routes.applicationCommands(env.DISCORD_CLIENT_ID), { body: [] });
+    console.log("Cleared global slash commands to prevent duplicate command rows.");
+  }
+
   await rest.put(route, { body: commands });
   console.log(`Registered ${commands.length} slash commands ${env.DISCORD_GUILD_ID ? "for one guild" : "globally"}.`);
 }
