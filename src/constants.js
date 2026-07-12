@@ -37,9 +37,16 @@ Drink:
 DMs Open or Closed:
 Pictures of Me: Optional. No explicit images in introductions.`;
 
-const WELCOME_MESSAGE = `Welcome in to Poly Saloon!
+function buildWelcomeMessage({ rulesChannel = "#the-rules", introChannel = "#general-chat-introductions" } = {}) {
+  return `Welcome in to Poly Saloon!
 
-Please read #the-rules and post your introduction in #general-chat-introductions so people in the community can get to know you.
+Start here: read ${rulesChannel} and click **I Agree to the Rules**.
+
+After that, post your introduction in ${introChannel} so people in the community can get to know you.
+
+Full server access requires both steps:
+1. Agree to the rules.
+2. Post a complete introduction.
 
 Your introduction must be posted within 24 hours or you may be removed from the server.
 
@@ -48,6 +55,7 @@ Please copy and paste the template below with your own answers. This helps other
 ${INTRO_TEMPLATE}
 
 After you post your intro, the bot will check it. If anything is missing, it will tell you what to fix.`;
+}
 
 const BOT_INTRO_DM = `Hey! Welcome to Poly Saloon.
 
@@ -160,7 +168,7 @@ module.exports = {
   CUSTOM_IDS,
   INTRO_LABELS,
   INTRO_TEMPLATE,
-  WELCOME_MESSAGE,
+  buildWelcomeMessage,
   BOT_INTRO_DM,
   BOT_INTRO_ANNOUNCEMENT,
   BOT_HELP_MESSAGE,
