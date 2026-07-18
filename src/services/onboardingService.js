@@ -150,7 +150,7 @@ async function findCompleteIntroInChannel(guild, config, userId) {
   return scan.intro ?? null;
 }
 
-async function scanCompleteIntroInChannel(guild, config, userId) {
+async function scanCompleteIntroInChannel(guild, config, userId, fallbackChannel = null) {
   const stats = {
     pages: 0,
     scannedMessages: 0,
@@ -179,6 +179,10 @@ async function scanCompleteIntroInChannel(guild, config, userId) {
       };
       return null;
     });
+  }
+  if (!channel && fallbackChannel?.id === config.introChannelId) {
+    stats.usedFallbackInteractionChannel = true;
+    channel = fallbackChannel;
   }
   stats.channelFetched = Boolean(channel);
   stats.configuredIntroChannelName = channel?.name ?? null;
@@ -534,7 +538,7 @@ async function buildStatus(guildOrGuildId, userId) {
     if (record && member) {
       record = await reconcileOnboardingRecord(guild, member, record, config);
     } else if (!record) {
-      const introScan = await scanCompleteIntroInChannel(guild, config, userId);
+      const introScan = await scanCompleteIntroInChannel(guild, config, userId, arguments[2] ?? null);
       if (introScan.status === "unavailable") {
         return [
           `I could not scan the configured intro channel: ${channelMention(config.introChannelId, "#general-chat-introductions")}.`,
