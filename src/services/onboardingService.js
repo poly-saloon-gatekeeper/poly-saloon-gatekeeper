@@ -512,7 +512,14 @@ async function buildStatus(guildOrGuildId, userId) {
     } else if (!record) {
       const introScan = await scanCompleteIntroInChannel(guild, config, userId);
       if (introScan.status === "unavailable") {
-        return `I could not scan the configured intro channel. Check that I can View Channel and Read Message History in ${channelMention(config.introChannelId, "#general-chat-introductions")}.`;
+        return [
+          `I could not scan the configured intro channel: ${channelMention(config.introChannelId, "#general-chat-introductions")}.`,
+          `Messages scanned before it stopped: ${introScan.stats?.scannedMessages ?? 0}`,
+          introScan.stats?.fetchError
+            ? `Discord error: ${introScan.stats.fetchError.code ?? introScan.stats.fetchError.name} - ${introScan.stats.fetchError.message}`
+            : "Discord did not return a detailed error.",
+          "Check View Channel and Read Message History, then try again after the bot has fully redeployed."
+        ].join("\n");
       }
       if (introScan.status === "found") {
         const user = await guild.client.users.fetch(userId).catch(() => null);
