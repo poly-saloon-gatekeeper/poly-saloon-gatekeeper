@@ -133,9 +133,10 @@ async function handleIntroTemplate(interaction) {
 async function handleIntroCheck(interaction) {
   const denied = requireModerator(interaction);
   if (denied) return denied;
+  await interaction.deferReply({ ephemeral: true });
   const user = interaction.options.getUser("user", true);
   const status = await buildStatus(interaction.guild, user.id);
-  await interaction.reply({ content: status, ephemeral: true });
+  await interaction.editReply({ content: status });
 }
 
 async function handleApprove(interaction) {
