@@ -135,7 +135,7 @@ async function handleIntroCheck(interaction) {
   if (denied) return denied;
   await interaction.deferReply({ ephemeral: true });
   const user = interaction.options.getUser("user", true);
-  const status = await buildStatus(interaction.guild, user.id);
+  const status = await buildStatus(interaction.guild, user.id, interaction.channel);
   await interaction.editReply({ content: status });
 }
 
