@@ -156,11 +156,35 @@ async function scanCompleteIntroInChannel(guild, config, userId) {
     scannedMessages: 0,
     userMessages: 0,
     userMessagesWithContent: 0,
-    configuredIntroChannelId: config.introChannelId ?? null
+    configuredIntroChannelId: config.introChannelId ?? null,
+    channelFetched: false,
+    channelTextBased: false,
+    channelHasMessageFetch: false
   };
   if (!config.introChannelId) return { status: "unavailable", intro: null, stats };
-  const channel = await guild.channels.fetch(config.introChannelId).catch(() => null);
+  let channel = await guild.channels.fetch(config.introChannelId).catch((error) => {
+    stats.channelFetchError = {
+      code: error.code ?? null,
+      name: error.name ?? "DiscordError",
+      message: error.message ?? "Unknown Discord channel fetch error"
+    };
+    return null;
+  });
+  if (!channel && guild.client?.channels?.fetch) {
+    channel = await guild.client.channels.fetch(config.introChannelId).catch((error) => {
+      stats.clientChannelFetchError = {
+        code: error.code ?? null,
+        name: error.name ?? "DiscordError",
+        message: error.message ?? "Unknown Discord client channel fetch error"
+      };
+      return null;
+    });
+  }
+  stats.channelFetched = Boolean(channel);
   stats.configuredIntroChannelName = channel?.name ?? null;
+  stats.channelType = channel?.type ?? null;
+  stats.channelTextBased = Boolean(channel?.isTextBased?.());
+  stats.channelHasMessageFetch = Boolean(channel?.messages?.fetch);
   if (!channel?.isTextBased?.() || !channel.messages?.fetch) return { status: "unavailable", intro: null, stats };
 
   let before;
@@ -514,7 +538,17 @@ async function buildStatus(guildOrGuildId, userId) {
       if (introScan.status === "unavailable") {
         return [
           `I could not scan the configured intro channel: ${channelMention(config.introChannelId, "#general-chat-introductions")}.`,
+          `Channel fetched: ${introScan.stats?.channelFetched ? "yes" : "no"}`,
+          introScan.stats?.channelType !== undefined ? `Channel type: ${introScan.stats.channelType}` : null,
+          `Text channel readable by bot: ${introScan.stats?.channelTextBased ? "yes" : "no"}`,
+          `Message history fetch available: ${introScan.stats?.channelHasMessageFetch ? "yes" : "no"}`,
           `Messages scanned before it stopped: ${introScan.stats?.scannedMessages ?? 0}`,
+          introScan.stats?.channelFetchError
+            ? `Guild channel fetch error: ${introScan.stats.channelFetchError.code ?? introScan.stats.channelFetchError.name} - ${introScan.stats.channelFetchError.message}`
+            : null,
+          introScan.stats?.clientChannelFetchError
+            ? `Client channel fetch error: ${introScan.stats.clientChannelFetchError.code ?? introScan.stats.clientChannelFetchError.name} - ${introScan.stats.clientChannelFetchError.message}`
+            : null,
           introScan.stats?.fetchError
             ? `Discord error: ${introScan.stats.fetchError.code ?? introScan.stats.fetchError.name} - ${introScan.stats.fetchError.message}`
             : "Discord did not return a detailed error.",
