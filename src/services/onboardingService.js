@@ -27,6 +27,51 @@ function introHasEnoughRealFields(content, missing) {
   return expectedMatches >= 9 || colonFieldCount >= 9;
 }
 
+function countRecognizedIntroLabels(content) {
+  const normalized = content.toLowerCase().replace(/\s*\/\s*/g, "/");
+  return [
+    "name/nickname",
+    "age",
+    "sexuality",
+    "gender",
+    "relationship status",
+    "looking for/dynamic",
+    "favorite color",
+    "favorite food",
+    "location",
+    "bookworm or movie lover",
+    "favorite activities",
+    "do you smoke",
+    "drink",
+    "dms open or closed",
+    "pictures of me"
+  ].filter((label) => normalized.includes(label)).length;
+}
+
+function looksLikeIntro(content) {
+  const age = extractAge(content);
+  if (!Number.isInteger(age) || age < 18) return false;
+
+  const colonFieldCount = content
+    .split(/\r?\n/)
+    .filter((line) => /^[^:\n]{2,45}:\s*\S/.test(line.trim()))
+    .length;
+  const recognizedLabelCount = countRecognizedIntroLabels(content);
+  const lower = content.toLowerCase();
+  const introSignals = [
+    "name",
+    "age",
+    "gender",
+    "relationship",
+    "looking",
+    "favorite",
+    "location",
+    "dms"
+  ].filter((word) => lower.includes(word)).length;
+
+  return (colonFieldCount >= 6 && introSignals >= 4) || recognizedLabelCount >= 5;
+}
+
 function validateIntro(content) {
   const missing = missingIntroLabels(content);
   const age = extractAge(content);
@@ -39,7 +84,7 @@ function validateIntro(content) {
     return { ok: false, status: "underage", missing: [], age };
   }
 
-  if (missing.length && !introHasEnoughRealFields(content, missing)) {
+  if (missing.length && !introHasEnoughRealFields(content, missing) && !looksLikeIntro(content)) {
     return { ok: false, status: "missing_fields", missing, age };
   }
 
@@ -106,23 +151,34 @@ async function findCompleteIntroInChannel(guild, config, userId) {
 }
 
 async function scanCompleteIntroInChannel(guild, config, userId) {
-  if (!config.introChannelId) return { status: "unavailable", intro: null };
+  const stats = {
+    pages: 0,
+    scannedMessages: 0,
+    userMessages: 0,
+    userMessagesWithContent: 0,
+    configuredIntroChannelId: config.introChannelId ?? null
+  };
+  if (!config.introChannelId) return { status: "unavailable", intro: null, stats };
   const channel = await guild.channels.fetch(config.introChannelId).catch(() => null);
-  if (!channel?.isTextBased?.() || !channel.messages?.fetch) return { status: "unavailable", intro: null };
+  stats.configuredIntroChannelName = channel?.name ?? null;
+  if (!channel?.isTextBased?.() || !channel.messages?.fetch) return { status: "unavailable", intro: null, stats };
 
   let before;
   while (true) {
     const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => undefined);
-    if (!messages) return { status: "unavailable", intro: null };
-    if (!messages.size) return { status: "not_found", intro: null };
+    if (!messages) return { status: "unavailable", intro: null, stats };
+    stats.pages += 1;
+    stats.scannedMessages += messages.size;
+    if (!messages.size) return { status: "not_found", intro: null, stats };
 
-    const intro = messages
-      .filter((message) => message.author?.id === userId)
-      .find((message) => validateIntro(message.content ?? "").ok);
+    const userMessages = messages.filter((message) => message.author?.id === userId);
+    stats.userMessages += userMessages.size;
+    stats.userMessagesWithContent += userMessages.filter((message) => Boolean((message.content ?? "").trim())).size;
+    const intro = userMessages.find((message) => validateIntro(message.content ?? "").ok || looksLikeIntro(message.content ?? ""));
 
-    if (intro) return { status: "found", intro };
+    if (intro) return { status: "found", intro, stats };
     before = messages.last()?.id;
-    if (!before || messages.size < 100) return { status: "not_found", intro: null };
+    if (!before || messages.size < 100) return { status: "not_found", intro: null, stats };
   }
 }
 
@@ -442,6 +498,9 @@ async function buildStatus(guildOrGuildId, userId) {
       record = await reconcileOnboardingRecord(guild, member, record, config);
     } else if (!record) {
       const introScan = await scanCompleteIntroInChannel(guild, config, userId);
+      if (introScan.status === "unavailable") {
+        return `I could not scan the configured intro channel. Check that I can View Channel and Read Message History in ${channelMention(config.introChannelId, "#general-chat-introductions")}.`;
+      }
       if (introScan.status === "found") {
         const user = await guild.client.users.fetch(userId).catch(() => null);
         record = await prisma.onboardingUser.create({
@@ -465,6 +524,21 @@ async function buildStatus(guildOrGuildId, userId) {
           userId,
           reason: "Intro-check found an existing complete intro in channel history."
         });
+      }
+      if (!record && introScan.stats) {
+        return [
+          "No onboarding record found for that member, and no complete intro was found in the configured intro channel.",
+          `Configured intro channel: ${channelMention(config.introChannelId, "#general-chat-introductions")}`,
+          `Messages scanned: ${introScan.stats.scannedMessages}`,
+          `Messages found from that member: ${introScan.stats.userMessages}`,
+          `Messages from that member with readable text: ${introScan.stats.userMessagesWithContent}`,
+          introScan.stats.userMessages === 0
+            ? "This usually means the selected member is not the same account that posted the intro, or the configured intro channel is not the one with the intro."
+            : null,
+          introScan.stats.userMessages > 0 && introScan.stats.userMessagesWithContent === 0
+            ? "I found messages from that member, but Discord did not give me readable text for them. Check Message Content Intent and channel permissions."
+            : null
+        ].filter(Boolean).join("\n");
       }
     }
   }
