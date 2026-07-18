@@ -165,8 +165,21 @@ async function scanCompleteIntroInChannel(guild, config, userId) {
 
   let before;
   while (true) {
-    const messages = await channel.messages.fetch({ limit: 100, before }).catch(() => undefined);
-    if (!messages) return { status: "unavailable", intro: null, stats };
+    const messages = await channel.messages.fetch({ limit: 100, before }).catch((error) => {
+      stats.fetchError = {
+        code: error.code ?? null,
+        name: error.name ?? "DiscordError",
+        message: error.message ?? "Unknown Discord history fetch error"
+      };
+      return undefined;
+    });
+    if (!messages) {
+      return {
+        status: stats.scannedMessages > 0 ? "partial" : "unavailable",
+        intro: null,
+        stats
+      };
+    }
     stats.pages += 1;
     stats.scannedMessages += messages.size;
     if (!messages.size) return { status: "not_found", intro: null, stats };
@@ -457,11 +470,11 @@ async function enforceOnboarding(client) {
         if (finalRecord.rulesAccepted) await maybeCompleteOnboarding(member);
         continue;
       }
-      if (finalIntroScan.status === "unavailable") {
+      if (finalIntroScan.status === "unavailable" || finalIntroScan.status === "partial") {
         await logAction(guild, "ONBOARDING_REMOVAL_SKIPPED", {
           userId: member.id,
           reason: "Skipped automatic removal because the intro channel could not be fully scanned.",
-          metadata: { missing }
+          metadata: { missing, scanStatus: finalIntroScan.status, scanStats: finalIntroScan.stats }
         });
         continue;
       }
@@ -527,11 +540,16 @@ async function buildStatus(guildOrGuildId, userId) {
       }
       if (!record && introScan.stats) {
         return [
-          "No onboarding record found for that member, and no complete intro was found in the configured intro channel.",
+          introScan.status === "partial"
+            ? "I scanned part of the intro channel but Discord stopped the deeper history scan before I reached the beginning."
+            : "No onboarding record found for that member, and no complete intro was found in the configured intro channel.",
           `Configured intro channel: ${channelMention(config.introChannelId, "#general-chat-introductions")}`,
           `Messages scanned: ${introScan.stats.scannedMessages}`,
           `Messages found from that member: ${introScan.stats.userMessages}`,
           `Messages from that member with readable text: ${introScan.stats.userMessagesWithContent}`,
+          introScan.stats.fetchError
+            ? `Scan stopped at Discord error: ${introScan.stats.fetchError.code ?? introScan.stats.fetchError.name}`
+            : null,
           introScan.stats.userMessages === 0
             ? "This usually means the selected member is not the same account that posted the intro, or the configured intro channel is not the one with the intro."
             : null,
