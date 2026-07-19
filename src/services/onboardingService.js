@@ -462,7 +462,89 @@ async function removeForOnboarding(member, reason) {
   return true;
 }
 
+async function syncDiscoveredOnboardingMembers(client) {
+  const configs = await prisma.guildConfig.findMany({
+    where: { newArrivalRoleId: { not: null } }
+  });
+
+  for (const config of configs) {
+    const guild = await client.guilds.fetch(config.guildId).catch(() => null);
+    if (!guild) continue;
+    const members = await guild.members.fetch().catch(() => null);
+    if (!members) {
+      await logAction(guild, "ONBOARDING_DISCOVERY_SKIPPED", {
+        reason: "Could not fetch guild members while looking for New Arrival members."
+      });
+      continue;
+    }
+
+    const memberList = typeof members.values === "function"
+      ? Array.from(members.values())
+      : Array.isArray(members)
+        ? members
+        : members?.id
+          ? [members]
+          : Object.values(members ?? {}).filter((member) => member?.id);
+
+    const candidates = memberList.filter((member) =>
+      !member.user?.bot
+      && hasConfiguredRole(member, config.newArrivalRoleId)
+      && !hasConfiguredRole(member, config.saloonMemberRoleId)
+    );
+
+    for (const member of candidates) {
+      const existing = await prisma.onboardingUser.findUnique({
+        where: { guildId_userId: { guildId: guild.id, userId: member.id } }
+      });
+      if (existing && !existing.removedAt) continue;
+
+      const now = new Date();
+      const deadline = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      await prisma.onboardingUser.upsert({
+        where: { guildId_userId: { guildId: guild.id, userId: member.id } },
+        update: {
+          username: member.user?.tag ?? member.id,
+          joinedAt: now,
+          introDeadline: deadline,
+          rulesAccepted: hasConfiguredRole(member, config.rulesAcceptedRoleId),
+          introCompleted: false,
+          introValidationStatus: "discovered_pending",
+          reminder12hSent: false,
+          reminder23hSent: false,
+          removedAt: null,
+          removalReason: null
+        },
+        create: {
+          guildId: guild.id,
+          userId: member.id,
+          username: member.user?.tag ?? member.id,
+          joinedAt: now,
+          introDeadline: deadline,
+          rulesAccepted: hasConfiguredRole(member, config.rulesAcceptedRoleId),
+          introValidationStatus: "discovered_pending"
+        }
+      });
+
+      const sent = await safeSend(member, {
+        content: [
+          `Welcome to Poly Saloon. Please accept the rules in ${channelMention(config.rulesChannelId, "#the-rules")} and post a complete intro in ${channelMention(config.introChannelId, "#general-chat-introductions")}.`,
+          "You have 24 hours from this reminder to finish onboarding before automatic removal can happen."
+        ].join("\n")
+      });
+
+      await logAction(guild, sent ? "ONBOARDING_DISCOVERED" : "ONBOARDING_DISCOVERY_DM_FAILED", {
+        userId: member.id,
+        reason: sent
+          ? "Found a New Arrival member without an onboarding record and sent the onboarding DM."
+          : "Found a New Arrival member without an onboarding record, but their DMs are closed.",
+        metadata: { introDeadline: deadline.toISOString() }
+      });
+    }
+  }
+}
+
 async function enforceOnboarding(client) {
+  await syncDiscoveredOnboardingMembers(client);
   const now = new Date();
   const pending = await prisma.onboardingUser.findMany({
     where: {
