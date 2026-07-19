@@ -28,6 +28,15 @@ async function createReport(guild, reporterId, targetId, reason) {
 }
 
 async function removeMember(member, moderatorId, reason) {
+  const removalReason = String(reason ?? "").trim();
+  if (!removalReason) {
+    await logAction(member.guild, "MEMBER_REMOVE_FAILED", {
+      userId: member.id,
+      moderatorId,
+      reason: "Removal reason was missing or blank."
+    });
+    throw new Error("A removal reason is required.");
+  }
   const moderator = await member.guild.members.fetch(moderatorId);
   if (!actorCanManageTarget(moderator, member)) {
     await logAction(member.guild, "MEMBER_REMOVE_FAILED", {
@@ -45,9 +54,9 @@ async function removeMember(member, moderatorId, reason) {
     });
     throw new Error("I cannot remove that member. Move my bot role above their highest role and confirm I have Kick Members.");
   }
-  await safeSend(member, { content: `You were removed from Poly Saloon: ${reason}` });
-  await member.kick(reason);
-  await logAction(member.guild, "MEMBER_REMOVED", { userId: member.id, moderatorId, reason });
+  await safeSend(member, { content: `You were removed from Poly Saloon: ${removalReason}` });
+  await member.kick(removalReason);
+  await logAction(member.guild, "MEMBER_REMOVED", { userId: member.id, moderatorId, reason: removalReason });
 }
 
 async function timeoutMember(member, moderatorId, durationText, reason) {
