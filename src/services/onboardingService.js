@@ -157,6 +157,12 @@ async function scanCompleteIntroInChannel(guild, config, userId, fallbackChannel
     userMessages: 0,
     userMessagesWithContent: 0,
     configuredIntroChannelId: config.introChannelId ?? null,
+    fallbackChannelId: fallbackChannel?.id ?? null,
+    fallbackChannelName: fallbackChannel?.name ?? null,
+    fallbackChannelUsable: false,
+    fallbackIdMatchesConfig: false,
+    fallbackNameMatchesIntro: false,
+    usedFallbackInteractionChannel: false,
     channelFetched: false,
     channelTextBased: false,
     channelHasMessageFetch: false
@@ -180,7 +186,13 @@ async function scanCompleteIntroInChannel(guild, config, userId, fallbackChannel
       return null;
     });
   }
-  if (!channel && fallbackChannel?.id === config.introChannelId) {
+  const fallbackChannelUsable = Boolean(fallbackChannel?.isTextBased?.() && fallbackChannel?.messages?.fetch);
+  const fallbackIdMatchesConfig = fallbackChannel?.id === config.introChannelId;
+  const fallbackNameMatchesIntro = fallbackChannel?.name === "general-chat-introductions";
+  stats.fallbackChannelUsable = fallbackChannelUsable;
+  stats.fallbackIdMatchesConfig = fallbackIdMatchesConfig;
+  stats.fallbackNameMatchesIntro = fallbackNameMatchesIntro;
+  if (!channel && fallbackChannelUsable && (fallbackIdMatchesConfig || fallbackNameMatchesIntro)) {
     stats.usedFallbackInteractionChannel = true;
     channel = fallbackChannel;
   }
@@ -525,7 +537,7 @@ async function enforceOnboarding(client) {
   }
 }
 
-async function buildStatus(guildOrGuildId, userId) {
+async function buildStatus(guildOrGuildId, userId, fallbackChannel = null) {
   const guildId = typeof guildOrGuildId === "string" ? guildOrGuildId : guildOrGuildId.id;
   let record = await prisma.onboardingUser.findUnique({
     where: { guildId_userId: { guildId, userId } }
@@ -538,14 +550,21 @@ async function buildStatus(guildOrGuildId, userId) {
     if (record && member) {
       record = await reconcileOnboardingRecord(guild, member, record, config);
     } else if (!record) {
-      const introScan = await scanCompleteIntroInChannel(guild, config, userId, arguments[2] ?? null);
+      const introScan = await scanCompleteIntroInChannel(guild, config, userId, fallbackChannel);
       if (introScan.status === "unavailable") {
         return [
           `I could not scan the configured intro channel: ${channelMention(config.introChannelId, "#general-chat-introductions")}.`,
+          `Configured intro channel ID: ${introScan.stats?.configuredIntroChannelId ?? "not set"}`,
+          `Current command channel ID: ${introScan.stats?.fallbackChannelId ?? "unknown"}`,
+          `Current command channel name: ${introScan.stats?.fallbackChannelName ?? "unknown"}`,
           `Channel fetched: ${introScan.stats?.channelFetched ? "yes" : "no"}`,
           introScan.stats?.channelType !== undefined ? `Channel type: ${introScan.stats.channelType}` : null,
           `Text channel readable by bot: ${introScan.stats?.channelTextBased ? "yes" : "no"}`,
           `Message history fetch available: ${introScan.stats?.channelHasMessageFetch ? "yes" : "no"}`,
+          `Current channel usable as fallback: ${introScan.stats?.fallbackChannelUsable ? "yes" : "no"}`,
+          `Current channel ID matches setup: ${introScan.stats?.fallbackIdMatchesConfig ? "yes" : "no"}`,
+          `Current channel name matches intro: ${introScan.stats?.fallbackNameMatchesIntro ? "yes" : "no"}`,
+          `Used current channel fallback: ${introScan.stats?.usedFallbackInteractionChannel ? "yes" : "no"}`,
           `Messages scanned before it stopped: ${introScan.stats?.scannedMessages ?? 0}`,
           introScan.stats?.channelFetchError
             ? `Guild channel fetch error: ${introScan.stats.channelFetchError.code ?? introScan.stats.channelFetchError.name} - ${introScan.stats.channelFetchError.message}`
@@ -589,6 +608,7 @@ async function buildStatus(guildOrGuildId, userId) {
             ? "I scanned part of the intro channel but Discord stopped the deeper history scan before I reached the beginning."
             : "No onboarding record found for that member, and no complete intro was found in the configured intro channel.",
           `Configured intro channel: ${channelMention(config.introChannelId, "#general-chat-introductions")}`,
+          `Used current channel fallback: ${introScan.stats.usedFallbackInteractionChannel ? "yes" : "no"}`,
           `Messages scanned: ${introScan.stats.scannedMessages}`,
           `Messages found from that member: ${introScan.stats.userMessages}`,
           `Messages from that member with readable text: ${introScan.stats.userMessagesWithContent}`,
