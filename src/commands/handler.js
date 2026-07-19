@@ -287,9 +287,15 @@ async function handleReport(interaction) {
   if (targetIsBot(user)) {
     return interaction.reply({ content: "Please report bot problems directly to moderators.", ephemeral: true });
   }
-  const reason = interaction.options.getString("reason", true);
+  const reason = interaction.options.getString("reason", true).trim();
+  if (!reason) {
+    return interaction.reply({ content: "Please include a clear report reason.", ephemeral: true });
+  }
   await createReport(interaction.guild, interaction.user.id, user.id, reason);
-  await interaction.reply({ content: "Thank you. Your report was sent privately to the moderation team.", ephemeral: true });
+  await interaction.reply({
+    content: `Thank you. Your report was sent privately to the moderation team.\nReason: ${reason}`,
+    ephemeral: true
+  });
 }
 
 async function handlePrompt(interaction) {
