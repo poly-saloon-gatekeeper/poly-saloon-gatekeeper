@@ -17,13 +17,22 @@ async function warnMember(guild, moderatorId, target, reason) {
 }
 
 async function createReport(guild, reporterId, targetId, reason) {
+  const reportReason = String(reason ?? "").trim();
+  if (!reportReason) {
+    await logAction(guild, "REPORT_REJECTED", {
+      userId: targetId,
+      moderatorId: reporterId,
+      reason: "Report reason was missing or blank."
+    });
+    throw new Error("A report reason is required.");
+  }
   await prisma.report.create({
-    data: { guildId: guild.id, reporterId, targetId, reason }
+    data: { guildId: guild.id, reporterId, targetId, reason: reportReason }
   });
   await logAction(guild, "REPORT_CREATED", {
     userId: targetId,
     moderatorId: reporterId,
-    reason
+    reason: reportReason
   });
 }
 
