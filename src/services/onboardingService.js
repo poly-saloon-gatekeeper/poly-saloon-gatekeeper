@@ -151,6 +151,11 @@ async function findCompleteIntroInChannel(guild, config, userId) {
 }
 
 async function scanCompleteIntroInChannel(guild, config, userId, fallbackChannel = null) {
+  const fallbackName = fallbackChannel?.name ?? null;
+  const fallbackNameMatchesIntro = typeof fallbackName === "string"
+    && fallbackName.toLowerCase() === "general-chat-introductions";
+  const fallbackIdMatchesConfig = fallbackChannel?.id === config.introChannelId;
+  const fallbackAllowed = Boolean(fallbackChannel?.id && (!config.introChannelId || fallbackIdMatchesConfig || fallbackNameMatchesIntro));
   const stats = {
     pages: 0,
     scannedMessages: 0,
@@ -158,25 +163,27 @@ async function scanCompleteIntroInChannel(guild, config, userId, fallbackChannel
     userMessagesWithContent: 0,
     configuredIntroChannelId: config.introChannelId ?? null,
     fallbackChannelId: fallbackChannel?.id ?? null,
-    fallbackChannelName: fallbackChannel?.name ?? null,
+    fallbackChannelName: fallbackName,
     fallbackChannelUsable: false,
-    fallbackIdMatchesConfig: false,
-    fallbackNameMatchesIntro: false,
+    fallbackIdMatchesConfig,
+    fallbackNameMatchesIntro,
     usedFallbackInteractionChannel: false,
     channelFetched: false,
     channelTextBased: false,
     channelHasMessageFetch: false
   };
-  if (!config.introChannelId) return { status: "unavailable", intro: null, stats };
-  let channel = await guild.channels.fetch(config.introChannelId).catch((error) => {
-    stats.channelFetchError = {
-      code: error.code ?? null,
-      name: error.name ?? "DiscordError",
-      message: error.message ?? "Unknown Discord channel fetch error"
-    };
-    return null;
-  });
-  if (!channel && guild.client?.channels?.fetch) {
+  let channel = null;
+  if (config.introChannelId) {
+    channel = await guild.channels.fetch(config.introChannelId).catch((error) => {
+      stats.channelFetchError = {
+        code: error.code ?? null,
+        name: error.name ?? "DiscordError",
+        message: error.message ?? "Unknown Discord channel fetch error"
+      };
+      return null;
+    });
+  }
+  if (!channel && config.introChannelId && guild.client?.channels?.fetch) {
     channel = await guild.client.channels.fetch(config.introChannelId).catch((error) => {
       stats.clientChannelFetchError = {
         code: error.code ?? null,
@@ -186,9 +193,20 @@ async function scanCompleteIntroInChannel(guild, config, userId, fallbackChannel
       return null;
     });
   }
-  const fallbackChannelUsable = Boolean(fallbackChannel?.isTextBased?.() && fallbackChannel?.messages?.fetch);
-  const fallbackIdMatchesConfig = fallbackChannel?.id === config.introChannelId;
-  const fallbackNameMatchesIntro = fallbackChannel?.name === "general-chat-introductions";
+  if (!channel && fallbackAllowed && guild.channels?.fetch) {
+    channel = await guild.channels.fetch(fallbackChannel.id).catch((error) => {
+      stats.fallbackChannelFetchError = {
+        code: error.code ?? null,
+        name: error.name ?? "DiscordError",
+        message: error.message ?? "Unknown Discord fallback channel fetch error"
+      };
+      return null;
+    });
+    if (channel) {
+      stats.usedFallbackInteractionChannel = true;
+    }
+  }
+  const fallbackChannelUsable = Boolean(channel?.isTextBased?.() && channel?.messages?.fetch);
   stats.fallbackChannelUsable = fallbackChannelUsable;
   stats.fallbackIdMatchesConfig = fallbackIdMatchesConfig;
   stats.fallbackNameMatchesIntro = fallbackNameMatchesIntro;
