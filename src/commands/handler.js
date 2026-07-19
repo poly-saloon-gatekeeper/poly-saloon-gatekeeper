@@ -209,10 +209,13 @@ async function handleRemove(interaction) {
     });
     return interaction.reply({ content: "I will not remove bot accounts with this command.", ephemeral: true });
   }
-  const reason = interaction.options.getString("reason", true);
+  const reason = interaction.options.getString("reason", true).trim();
+  if (!reason) {
+    return interaction.reply({ content: "Please include a clear removal reason.", ephemeral: true });
+  }
   const member = await interaction.guild.members.fetch(user.id);
   await removeMember(member, interaction.user.id, reason);
-  await interaction.reply({ content: `${user} was removed and logged.`, ephemeral: true });
+  await interaction.reply({ content: `${user} was removed and logged.\nReason: ${reason}`, ephemeral: true });
 }
 
 async function handleWarn(interaction) {
