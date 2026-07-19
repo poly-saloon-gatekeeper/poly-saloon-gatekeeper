@@ -38,6 +38,18 @@ const commands = [
     .addUserOption((option) => option.setName("user").setDescription("Member to check").setRequired(true)),
 
   new SlashCommandBuilder()
+    .setName("onboarding")
+    .setDescription("Admin maintenance tools for onboarding records and roles.")
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand((sub) => sub
+      .setName("cleanup-roles")
+      .setDescription("Clean messy New Arrival and Saloon Member role state.")
+      .addBooleanOption((option) => option
+        .setName("dry_run")
+        .setDescription("Preview changes without applying them. Defaults to true.")
+        .setRequired(false))),
+
+  new SlashCommandBuilder()
     .setName("approve")
     .setDescription("Manually approve a member into Poly Saloon.")
     .setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers)
