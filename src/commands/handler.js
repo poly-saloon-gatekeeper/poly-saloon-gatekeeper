@@ -18,7 +18,7 @@ const {
   botCanManageTarget
 } = require("../utils/permissions");
 const { safeRoleAdd, safeRoleRemove, safeSend } = require("../utils/discord");
-const { buildStatus, maybeCompleteOnboarding } = require("../services/onboardingService");
+const { buildStatus, maybeCompleteOnboarding, cleanupOnboardingRoles } = require("../services/onboardingService");
 const { warnMember, createReport, removeMember, timeoutMember } = require("../services/moderationService");
 const { addPrompt, postTodayPrompt, isValidPromptTime } = require("../services/promptService");
 const {
@@ -40,6 +40,7 @@ const {
 async function handleCommand(interaction) {
   if (interaction.commandName === "setup") return handleSetup(interaction);
   if (interaction.commandName === "rules-post") return handleRulesPost(interaction);
+  if (interaction.commandName === "onboarding") return handleOnboarding(interaction);
   if (interaction.commandName === "intro-template") return handleIntroTemplate(interaction);
   if (interaction.commandName === "intro-check") return handleIntroCheck(interaction);
   if (interaction.commandName === "approve") return handleApprove(interaction);
@@ -137,6 +138,38 @@ async function handleIntroCheck(interaction) {
   const user = interaction.options.getUser("user", true);
   const status = await buildStatus(interaction.guild, user.id, interaction.channel);
   await interaction.editReply({ content: status });
+}
+
+async function handleOnboarding(interaction) {
+  const denied = requireAdmin(interaction);
+  if (denied) return denied;
+
+  const sub = interaction.options.getSubcommand();
+  if (sub === "cleanup-roles") {
+    await interaction.deferReply({ ephemeral: true });
+    const dryRun = interaction.options.getBoolean("dry_run") ?? true;
+    const summary = await cleanupOnboardingRoles(interaction.guild, {
+      dryRun,
+      moderatorId: interaction.user.id
+    });
+    return interaction.editReply({
+      content: [
+        dryRun ? "Onboarding role cleanup preview:" : "Onboarding role cleanup applied:",
+        `Members scanned: ${summary.scanned}`,
+        dryRun
+          ? `Would mark approved in database: ${summary.wouldMarkApproved}`
+          : `Marked approved in database: ${summary.markedApproved}`,
+        dryRun
+          ? `Would add Saloon Member: ${summary.wouldAddSaloon}`
+          : `Added Saloon Member: ${summary.saloonAdded}`,
+        dryRun
+          ? `Would remove New Arrival: ${summary.wouldRemoveNewArrival}`
+          : `Removed New Arrival: ${summary.newArrivalRemoved}`,
+        `Role failures: ${summary.roleFailures}`,
+        "No members were kicked."
+      ].join("\n")
+    });
+  }
 }
 
 async function handleApprove(interaction) {
