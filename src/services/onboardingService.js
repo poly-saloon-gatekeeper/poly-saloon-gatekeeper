@@ -145,10 +145,13 @@ function roleIdsAreDistinct(...roleIds) {
   return new Set(configured).size === configured.length;
 }
 
+function hasSaloonMemberRole(member, config) {
+  return Boolean(config.saloonMemberRoleId && hasConfiguredRole(member, config.saloonMemberRoleId));
+}
+
 function hasApprovedMemberRole(member, config) {
   return roleIdsAreDistinct(config.newArrivalRoleId, config.saloonMemberRoleId)
-    && hasConfiguredRole(member, config.saloonMemberRoleId)
-    && !hasConfiguredRole(member, config.newArrivalRoleId);
+    && hasSaloonMemberRole(member, config);
 }
 
 async function findCompleteIntroInChannel(guild, config, userId) {
@@ -311,7 +314,9 @@ async function reconcileOnboardingRecord(guild, member, record, config) {
 
 async function acceptRules(interaction) {
   const config = await getConfig(interaction.guildId);
-  const member = await interaction.guild.members.fetch(interaction.user.id);
+  const member = await interaction.guild.members.fetch({ user: interaction.user.id, force: true }).catch(() =>
+    interaction.guild.members.fetch(interaction.user.id)
+  );
   const existingRecord = await prisma.onboardingUser.findUnique({
     where: { guildId_userId: { guildId: interaction.guildId, userId: interaction.user.id } }
   });
@@ -460,6 +465,120 @@ async function maybeCompleteOnboarding(member) {
     metadata: roleFailures.length ? { roleFailures } : undefined
   });
   return !roleFailures.length;
+}
+
+async function cleanupOnboardingRoles(guild, { dryRun = true, moderatorId = null } = {}) {
+  const config = await getConfig(guild.id);
+  if (!config.newArrivalRoleId || !config.saloonMemberRoleId) {
+    throw new Error("Configure both New Arrival and Saloon Member roles with /setup first.");
+  }
+
+  const members = await guild.members.fetch();
+  const memberList = typeof members.values === "function"
+    ? Array.from(members.values())
+    : Array.isArray(members)
+      ? members
+      : members?.id
+        ? [members]
+        : Object.values(members ?? {}).filter((member) => member?.id);
+
+  const summary = {
+    scanned: 0,
+    skippedBots: 0,
+    markedApproved: 0,
+    saloonAdded: 0,
+    newArrivalRemoved: 0,
+    roleFailures: 0,
+    wouldMarkApproved: 0,
+    wouldAddSaloon: 0,
+    wouldRemoveNewArrival: 0
+  };
+
+  for (const member of memberList) {
+    if (!member || member.user?.bot) {
+      summary.skippedBots += 1;
+      continue;
+    }
+    summary.scanned += 1;
+
+    const record = await prisma.onboardingUser.findUnique({
+      where: { guildId_userId: { guildId: guild.id, userId: member.id } }
+    });
+    const hasNewArrival = hasConfiguredRole(member, config.newArrivalRoleId);
+    const hasSaloonMember = hasSaloonMemberRole(member, config);
+    const hasRulesAccepted = hasConfiguredRole(member, config.rulesAcceptedRoleId);
+    const approvedByRecord = Boolean(record?.rulesAccepted && record.introCompleted && !record.removedAt);
+    const approvedByRole = hasSaloonMember;
+    const shouldBeApproved = approvedByRecord || approvedByRole;
+
+    if (!shouldBeApproved) continue;
+
+    const needsRecordReconcile = !record || !record.rulesAccepted || !record.introCompleted;
+    if (needsRecordReconcile) {
+      if (dryRun) {
+        summary.wouldMarkApproved += 1;
+      } else {
+        await prisma.onboardingUser.upsert({
+          where: { guildId_userId: { guildId: guild.id, userId: member.id } },
+          update: {
+            rulesAccepted: true,
+            introCompleted: true,
+            introValidationStatus: "already_saloon_member",
+            removedAt: null,
+            removalReason: null
+          },
+          create: {
+            guildId: guild.id,
+            userId: member.id,
+            username: member.user?.tag ?? member.id,
+            joinedAt: member.joinedAt ?? new Date(),
+            introDeadline: member.joinedAt
+              ? new Date(member.joinedAt.getTime() + 24 * 60 * 60 * 1000)
+              : new Date(),
+            rulesAccepted: true,
+            introCompleted: true,
+            introValidationStatus: "already_saloon_member"
+          }
+        });
+        summary.markedApproved += 1;
+      }
+    }
+
+    if (!hasSaloonMember && approvedByRecord) {
+      if (dryRun) {
+        summary.wouldAddSaloon += 1;
+      } else {
+        const added = await safeRoleAdd(member, config.saloonMemberRoleId);
+        if (added || member.roles.cache.has(config.saloonMemberRoleId)) summary.saloonAdded += 1;
+        else summary.roleFailures += 1;
+      }
+    }
+
+    if (hasNewArrival) {
+      if (dryRun) {
+        summary.wouldRemoveNewArrival += 1;
+      } else {
+        const removed = await safeRoleRemove(member, config.newArrivalRoleId);
+        if (removed || !member.roles.cache.has(config.newArrivalRoleId)) summary.newArrivalRemoved += 1;
+        else summary.roleFailures += 1;
+      }
+    }
+
+    if (hasRulesAccepted && !hasSaloonMember && !approvedByRecord) {
+      // Keep rules-only members pending their intro. This cleanup does not approve partial onboarding.
+      continue;
+    }
+  }
+
+  await logAction(guild, dryRun ? "ONBOARDING_ROLE_CLEANUP_PREVIEW" : "ONBOARDING_ROLE_CLEANUP_APPLIED", {
+    moderatorId,
+    reason: dryRun
+      ? "Previewed onboarding role cleanup without changing roles."
+      : "Applied onboarding role cleanup.",
+    metadata: summary
+  });
+
+  return summary;
 }
 
 async function removeForOnboarding(member, reason) {
@@ -770,6 +889,7 @@ module.exports = {
   acceptRules,
   handleIntroMessage,
   maybeCompleteOnboarding,
+  cleanupOnboardingRoles,
   removeForOnboarding,
   enforceOnboarding,
   findCompleteIntroInChannel,
