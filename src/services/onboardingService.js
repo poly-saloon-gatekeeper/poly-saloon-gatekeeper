@@ -145,6 +145,12 @@ function roleIdsAreDistinct(...roleIds) {
   return new Set(configured).size === configured.length;
 }
 
+function hasApprovedMemberRole(member, config) {
+  return roleIdsAreDistinct(config.newArrivalRoleId, config.saloonMemberRoleId)
+    && hasConfiguredRole(member, config.saloonMemberRoleId)
+    && !hasConfiguredRole(member, config.newArrivalRoleId);
+}
+
 async function findCompleteIntroInChannel(guild, config, userId) {
   const scan = await scanCompleteIntroInChannel(guild, config, userId);
   return scan.intro ?? null;
@@ -279,9 +285,7 @@ async function reconcileOnboardingRecord(guild, member, record, config) {
     }
   }
 
-  const saloonRoleMeansApproved = roleIdsAreDistinct(config.newArrivalRoleId, config.saloonMemberRoleId)
-    && hasConfiguredRole(member, config.saloonMemberRoleId)
-    && !hasConfiguredRole(member, config.newArrivalRoleId);
+  const saloonRoleMeansApproved = hasApprovedMemberRole(member, config);
 
   if (saloonRoleMeansApproved) {
     update.rulesAccepted = true;
@@ -312,7 +316,29 @@ async function acceptRules(interaction) {
     where: { guildId_userId: { guildId: interaction.guildId, userId: interaction.user.id } }
   });
 
-  if (existingRecord?.rulesAccepted || hasConfiguredRole(member, config.rulesAcceptedRoleId)) {
+  if (existingRecord?.rulesAccepted || hasConfiguredRole(member, config.rulesAcceptedRoleId) || hasApprovedMemberRole(member, config)) {
+    if (hasApprovedMemberRole(member, config)) {
+      await prisma.onboardingUser.upsert({
+        where: { guildId_userId: { guildId: interaction.guildId, userId: interaction.user.id } },
+        update: {
+          rulesAccepted: true,
+          introCompleted: true,
+          introValidationStatus: "already_saloon_member"
+        },
+        create: {
+          guildId: interaction.guildId,
+          userId: interaction.user.id,
+          username: interaction.user.tag,
+          joinedAt: member.joinedAt ?? new Date(),
+          introDeadline: member.joinedAt
+            ? new Date(member.joinedAt.getTime() + 24 * 60 * 60 * 1000)
+            : new Date(),
+          rulesAccepted: true,
+          introCompleted: true,
+          introValidationStatus: "already_saloon_member"
+        }
+      });
+    }
     await maybeCompleteOnboarding(member);
     await interaction.deferUpdate();
     return;
@@ -420,6 +446,8 @@ async function maybeCompleteOnboarding(member) {
   if (!record?.rulesAccepted || !record.introCompleted || record.removedAt) return false;
 
   const config = await getConfig(member.guild.id);
+  if (hasApprovedMemberRole(member, config)) return true;
+
   const removedNewArrival = await safeRoleRemove(member, config.newArrivalRoleId);
   const addedSaloonMember = await safeRoleAdd(member, config.saloonMemberRoleId);
   const roleFailures = [
