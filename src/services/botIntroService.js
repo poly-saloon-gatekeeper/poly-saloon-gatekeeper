@@ -164,8 +164,8 @@ async function startCampaign(guild, moderatorId) {
     metadata: { queued: queue.length }
   });
 
-  processQueue(guild, state, moderatorId).catch((error) => {
-    logAction(guild, "BOT_INTRO_DM_CAMPAIGN_ERROR", {
+  state.promise = processQueue(guild, state, moderatorId).catch(async (error) => {
+    await logAction(guild, "BOT_INTRO_DM_CAMPAIGN_ERROR", {
       moderatorId,
       reason: error.message
     });
@@ -236,12 +236,15 @@ async function resumeRunningCampaigns(client) {
       metadata: { queued: queue.length }
     });
 
-    processQueue(guild, state, campaign.startedBy).catch((error) => {
-      logAction(guild, "BOT_INTRO_DM_CAMPAIGN_ERROR", {
+    state.promise = processQueue(guild, state, campaign.startedBy).catch(async (error) => {
+      await logAction(guild, "BOT_INTRO_DM_CAMPAIGN_ERROR", {
         moderatorId: campaign.startedBy,
         reason: error.message
       });
     });
+    if (process.env.NODE_ENV === "test") {
+      await state.promise;
+    }
   }
 }
 
